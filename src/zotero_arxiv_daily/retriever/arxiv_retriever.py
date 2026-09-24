@@ -140,17 +140,27 @@ class ArxivRetriever(BaseRetriever):
         retryable_statuses = {429, 500, 502, 503, 504}
 
         for i in range(0, len(all_paper_ids), 20):
-            search = arxiv.Search(id_list=all_paper_ids[i:i + 20])
+            batch_ids = all_paper_ids[i:i + 20]
+            search = arxiv.Search(id_list=batch_ids)
+            fallback_to_single = False
 
             for attempt in range(max_batch_retries):
                 try:
                     batch = list(client.results(search))
-                    bar.update(len(batch))
                     raw_papers.extend(batch)
+                    bar.update(len(batch_ids))
                     break
 
                 except arxiv.HTTPError as exc:
                     status = getattr(exc, "status", None)
+
+                    if status == 406:
+                        logger.warning(
+                            f"arXiv API 406 on batch {i // 20}. "
+                            "Falling back to per-paper requests."
+                        )
+                        fallback_to_single = True
+                        break
 
                     if status in retryable_statuses and attempt < max_batch_retries - 1:
                         wait = min(600, batch_retry_delay * (2 ** attempt))
@@ -165,8 +175,30 @@ class ArxivRetriever(BaseRetriever):
                     else:
                         raise
 
+            if fallback_to_single:
+                recovered = 0
+                for index, paper_id in enumerate(batch_ids):
+                    try:
+                        papers = list(client.results(arxiv.Search(id_list=[paper_id])))
+                        raw_papers.extend(papers)
+                        recovered += len(papers)
+                    except arxiv.HTTPError as exc:
+                        status = getattr(exc, "status", None)
+                        logger.warning(
+                            f"Skipping arXiv paper {paper_id} due to API error status {status}"
+                        )
+
+                    if index + 1 < len(batch_ids):
+                        sleep(1)
+
+                logger.info(
+                    f"Recovered {recovered}/{len(batch_ids)} papers "
+                    f"from batch {i // 20} using per-paper requests"
+                )
+                bar.update(len(batch_ids))
+
             if i + 20 < len(all_paper_ids):
-                sleep(10)
+                sleep(3)
         bar.close()
 
         return raw_papers
