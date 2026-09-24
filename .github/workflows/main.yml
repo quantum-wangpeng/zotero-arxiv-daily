@@ -1,10 +1,6 @@
 name: Send emails daily
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/main.yml'
   schedule:
     - cron: '0 22 * * *'
 
