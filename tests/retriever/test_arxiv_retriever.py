@@ -205,3 +205,63 @@ def test_arxiv_retriever_skips_single_paper_that_still_returns_406(
         f"Skipping arXiv paper {skipped_id}" in warning
         for warning in warnings
     )
+
+
+def test_arxiv_rss_logs_entries_and_announcement_types(config, monkeypatch):
+    # The feed loaded successfully, but the user's configuration excludes cross-lists.
+    # This should be distinguishable from a failed RSS request.
+    feed = SimpleNamespace(
+        status=200,
+        bozo=False,
+        feed=SimpleNamespace(title="arXiv quant-ph"),
+        entries=[
+            {"id": "oai:arXiv.org:2610.00001v1", "arxiv_announce_type": "cross"},
+            {"id": "oai:arXiv.org:2610.00002v1", "arxiv_announce_type": "replace"},
+        ],
+    )
+    monkeypatch.setattr(arxiv_retriever.feedparser, "parse", lambda _: feed)
+    info_messages: list[str] = []
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        arxiv_retriever,
+        "logger",
+        SimpleNamespace(info=info_messages.append, warning=warnings.append),
+    )
+
+    papers = ArxivRetriever(config)._retrieve_raw_papers()
+
+    assert papers == []
+    assert any("http_status=200" in msg and "total_entries=2" in msg for msg in info_messages)
+    assert any("eligible_papers=0" in msg for msg in info_messages)
+    assert any("'cross': 1" in msg and "'replace': 1" in msg for msg in info_messages)
+    assert any("no eligible new-paper entries" in msg for msg in warnings)
+
+
+def test_arxiv_rss_http_error_is_not_treated_as_no_papers(config, monkeypatch):
+    import pytest
+
+    feed = SimpleNamespace(
+        status=503,
+        bozo=False,
+        feed=SimpleNamespace(title=""),
+        entries=[],
+    )
+    monkeypatch.setattr(arxiv_retriever.feedparser, "parse", lambda _: feed)
+    with pytest.raises(RuntimeError, match="arXiv RSS returned HTTP 503"):
+        ArxivRetriever(config)._retrieve_raw_papers()
+
+
+def test_arxiv_rss_empty_invalid_document_is_not_treated_as_no_papers(
+    config, monkeypatch
+):
+    import pytest
+
+    feed = SimpleNamespace(
+        status=200,
+        bozo=False,
+        feed=SimpleNamespace(title=""),
+        entries=[],
+    )
+    monkeypatch.setattr(arxiv_retriever.feedparser, "parse", lambda _: feed)
+    with pytest.raises(RuntimeError, match="no feed title or entries"):
+        ArxivRetriever(config)._retrieve_raw_papers()
