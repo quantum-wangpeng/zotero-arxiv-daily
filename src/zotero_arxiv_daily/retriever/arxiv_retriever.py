@@ -118,17 +118,54 @@ class ArxivRetriever(BaseRetriever):
         client = arxiv.Client(num_retries=10, delay_seconds=10)
         query = '+'.join(self.config.source.arxiv.category)
         include_cross_list = self.config.source.arxiv.get("include_cross_list", False)
-        # Get the latest paper from arxiv rss feed
-        feed = feedparser.parse(f"https://rss.arxiv.org/atom/{query}")
-        if 'Feed error for query' in feed.feed.title:
-            raise Exception(f"Invalid ARXIV_QUERY: {query}.")
+        # Retrieve RSS paper IDs and log enough metadata to diagnose empty feeds.
+        rss_url = f"https://rss.arxiv.org/atom/{query}"
+        feed = feedparser.parse(rss_url)
+        status = getattr(feed, "status", None)
+        feed_title = getattr(getattr(feed, "feed", None), "title", "")
+        entries = getattr(feed, "entries", [])
+        parse_error = getattr(feed, "bozo_exception", None)
+        is_malformed = bool(getattr(feed, "bozo", False))
+
+        logger.info(
+            f"arXiv RSS: url={rss_url}, http_status={status if status is not None else 'unknown'}, "
+            f"title={feed_title!r}, total_entries={len(entries)}, bozo={is_malformed}"
+        )
+
+        # Don't silently count HTTP errors or malformed, empty documents as
+        # "no new papers": these are retrieval failures, not an empty digest.
+        if status is not None and not 200 <= status < 300:
+            raise RuntimeError(f"arXiv RSS returned HTTP {status}: {rss_url}")
+        if is_malformed:
+            logger.warning(f"arXiv RSS parse warning: {parse_error}")
+            if not entries:
+                raise RuntimeError(f"arXiv RSS is malformed and has no entries: {rss_url}")
+        if 'Feed error for query' in feed_title:
+            raise ValueError(f"Invalid ARXIV_QUERY: {query}.")
+        if not feed_title and not entries:
+            raise RuntimeError(f"arXiv RSS returned no feed title or entries: {rss_url}")
+
         raw_papers = []
         allowed_announce_types = {"new", "cross"} if include_cross_list else {"new"}
+        announce_types = {}
+        for entry in entries:
+            announce_type = entry.get("arxiv_announce_type", "new")
+            announce_types[announce_type] = announce_types.get(announce_type, 0) + 1
+
         all_paper_ids = [
             i.id.removeprefix("oai:arXiv.org:")
-            for i in feed.entries
+            for i in entries
             if i.get("arxiv_announce_type", "new") in allowed_announce_types
         ]
+        logger.info(
+            f"arXiv RSS: announce_types={announce_types}, "
+            f"eligible_papers={len(all_paper_ids)}, include_cross_list={include_cross_list}"
+        )
+        if not all_paper_ids:
+            logger.warning(
+                "arXiv RSS has no eligible new-paper entries; "
+                "this may reflect its publication schedule or an empty feed."
+            )
         if self.config.executor.debug:
             all_paper_ids = all_paper_ids[:10]
 
