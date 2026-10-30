@@ -2,7 +2,8 @@ name: Send emails daily
 on:
   workflow_dispatch:
   schedule:
-    - cron: '23 22 * * *'
+    # 14:23 China Standard Time (UTC+8); avoid running before the arXiv RSS refresh.
+    - cron: '23 6 * * *'
 
 jobs:
   calculate-and-send:
