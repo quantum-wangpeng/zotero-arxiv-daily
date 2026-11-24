@@ -37,4 +37,4 @@ jobs:
           printf "%b\n" "$CUSTOM_CONFIG" > config/custom.yaml
           echo "Use custom config: "
           cat config/custom.yaml
-          uv run src/zotero_arxiv_daily/main.py llm.generation_kwargs.model=gpt-6.2-sol ++llm.generation_kwargs.reasoning_effort=medium
+          uv run src/zotero_arxiv_daily/main.py llm.generation_kwargs.model=gpt-6.2-sol
